@@ -8,19 +8,24 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
+	_ "github.com/joho/godotenv/autoload"
 
 	"cloud.google.com/go/translate/apiv3"
 )
 
+// This function will handle the database connection
 func main() {
-	// This is function will initiate all other functions and will not have any complex logic
+	db, err := sql.Open("mysql", "user:password@/dbname")
+	if err != nil {
+		panic(err)
+	}
 
+	db.SetConnMaxLifetime(time.Minute * 3)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(10)
 }
 
-func connectToDatabase() {
-	// This function handles the database conncetion
-}
+// This function handles translation of string through google cloud api
+func translateProducts() {
 
-func translate() {
-	// This function handles translation of string through google cloud api
 }
