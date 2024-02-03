@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"time"
@@ -23,9 +22,10 @@ type QueryOutput struct {
 	Name             string
 	Description      string
 	ShortDescription string
+	Sku              string
 }
 
-// This function handles loading .env and preparing database connection
+// LoadEnv This function handles loading .env and preparing database connection
 func LoadEnv() {
 	err := godotenv.Load()
 	if err != nil {
@@ -71,84 +71,117 @@ func main() {
 	if err != nil {
 		log.Fatalf("Could not connect to database: %v", err)
 	} else {
-		fmt.Println("Succesfully connected to database!")
+		fmt.Println("Successfully connected to database!")
 	}
 
-	err = SelectQuery(db)
 	if err != nil {
 		log.Fatalf("Failed to send query: %v", err)
 	} else {
-		fmt.Println("Query executed succesfully!")
+		fmt.Println("Query executed successfully!")
 	}
 
 	db.SetConnMaxLifetime(time.Minute * 3)
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(10)
+
+	ctx := context.Background()
+
+	// Initialize Google Cloud Translation client
+	client, err := translate.NewTranslationClient(ctx)
+	if err != nil {
+		log.Fatalf("Failed to create translation client: %v", err)
+	}
+	defer client.Close()
+
+	// Retrieve querySlice from SelectQuery
+	querySlice, err := SelectQuery(db)
+	if err != nil {
+		log.Fatalf("Failed to execute select query: %v", err)
+	}
+
+	// Translate the products
+	projectID := os.Getenv("GOOGLE_PROJECTID") // Make sure this is set in your .env or environment
+	if err := translateProducts(ctx, client, querySlice, projectID); err != nil {
+		log.Fatalf("Failed to translate products: %v", err)
+	}
 }
 
-func SelectQuery(db *sql.DB) error {
-	query := "SELECT `name`, `description`, `short_description` FROM `trrc_product_flat` WHERE `locale` = 'nl';"
+func SelectQuery(db *sql.DB) ([]QueryOutput, error) {
+	query := "SELECT `name`, `description`, `short_description`, `sku` FROM `trrc_product_flat` WHERE `locale` = 'nl';"
 
 	rows, err := db.Query(query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 
 	var querySlice []QueryOutput
 	for rows.Next() {
-		var name string
-		var description string
-		var short_description string
-
-		err := rows.Scan(&name, &description, &short_description)
+		var product QueryOutput
+		err := rows.Scan(&product.Name, &product.Description, &product.ShortDescription, &product.Sku)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(err) // Consider returning error instead
 		}
-
-		fmt.Println(name, description, short_description)
-		querySlice = append(querySlice, QueryOutput{Name: name, Description: description, ShortDescription: short_description})
+		querySlice = append(querySlice, product)
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Fatal(err)
+		log.Fatal(err) // Consider returning error instead
+	}
+	return querySlice, nil
+}
+
+// Assuming querySlice is accessible or passed to this function
+func translateProducts(ctx context.Context, client *translate.TranslationClient, querySlice []QueryOutput, projectID string) error {
+	projectID = os.Getenv("GOOGLE_PROJECTID")
+	sourceLang := "nl"
+	targetLang := "fr"
+
+	for i, product := range querySlice {
+		translatedDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.Description)
+		if err != nil {
+			log.Printf("Failed to translate description for product at index %d: %v", i, err)
+			continue
+		}
+		querySlice[i].Description = translatedDescription
+
+		translatedShortDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.ShortDescription)
+		if err != nil {
+			log.Printf("Failed to translate short description for product at index %d: %v", i, err)
+			continue
+		}
+		querySlice[i].ShortDescription = translatedShortDescription
+	}
+
+	for _, product := range querySlice {
+		fmt.Printf("Translated Description: %s, Short Description: %s\n", product.Description, product.ShortDescription)
 	}
 	return nil
 }
 
-/* This function handles translation of string through google cloud api */
-func translateProducts(w io.Writer, projectID string, sourceLang string, targetLang string, text string) error {
-	projectID = "my-project-id"
-	sourceLang = "nl"
-	targetLang = "fr"
-	text = "Text you wish to translate"
-
-	ctx := context.Background()
-	client, err := translate.NewTranslationClient(ctx)
-	if err != nil {
-		return fmt.Errorf("NewTranslationClient: %w", err)
-	}
-	defer client.Close()
-
+// Helper function to abstract the translation API call
+func translateText(ctx context.Context, client *translate.TranslationClient, projectID, sourceLang, targetLang, text string) (string, error) {
 	req := &translatepb.TranslateTextRequest{
 		Parent:             fmt.Sprintf("projects/%s/locations/global", projectID),
 		SourceLanguageCode: sourceLang,
 		TargetLanguageCode: targetLang,
-		MimeType:           "text/plain", // Mime types: "text/plain", "text/html"
+		MimeType:           "text/plain",
 		Contents:           []string{text},
 	}
 
 	resp, err := client.TranslateText(ctx, req)
 	if err != nil {
-		return fmt.Errorf("TranslateText: %w", err)
+		return "", fmt.Errorf("TranslateText: %w", err)
 	}
 
-	for _, translation := range resp.GetTranslations() {
-		fmt.Fprintf(w, "Translated text: %v\n", translation.GetTranslatedText())
+	if len(resp.GetTranslations()) > 0 {
+		return resp.GetTranslations()[0].GetTranslatedText(), nil
 	}
-	return nil
+	return "", nil
 }
 
+// Update query function to use later
+/*
 func UpdateQuery(db *sql.DB) error {
 	stmt, err := db.Prepare("SELECT `name`, `description`, `short_description` FROM `trrc_product_flat` WHERE `locale` = 'nl';")
 	if err != nil {
@@ -162,6 +195,40 @@ func UpdateQuery(db *sql.DB) error {
 	}
 	return nil
 }
+*/
+
+// My old function for translation, keeping just in case
+/* This function handles translation of string through Google cloud api */
+// func translateProducts(w io.Writer, projectID string, sourceLang string, targetLang string, text string) error {
+// 	projectID = os.Getenv("GOOGLE_PROJECTID")
+// 	sourceLang = "nl"
+// 	targetLang = "fr"
+//
+// 	ctx := context.Background()
+// 	client, err := translate.NewTranslationClient(ctx)
+// 	if err != nil {
+// 		return fmt.Errorf("NewTranslationClient: %w", err)
+// 	}
+// 	defer client.Close()
+//
+// 	req := &translatepb.TranslateTextRequest{
+// 		Parent:             fmt.Sprintf("projects/%s/locations/global", projectID),
+// 		SourceLanguageCode: sourceLang,
+// 		TargetLanguageCode: targetLang,
+// 		MimeType:           "text/plain", // Mime types: "text/plain", "text/html"
+// 		Contents:           []string{text},
+// 	}
+//
+// 	resp, err := client.TranslateText(ctx, req)
+// 	if err != nil {
+// 		return fmt.Errorf("TranslateText: %w", err)
+// 	}
+//
+// 	for _, translation := range resp.GetTranslations() {
+// 		fmt.Fprintf(w, "Translated text: %v\n", translation.GetTranslatedText())
+// 	}
+// 	return nil
+// }
 
 // Fields to translate
 // short_description, description,
