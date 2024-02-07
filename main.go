@@ -18,11 +18,38 @@ import (
 	"github.com/simukti/sqldb-logger/logadapter/zerologadapter"
 )
 
-type QueryOutput struct {
-	Name             string
-	Description      string
-	ShortDescription string
-	Sku              string
+var (
+	name_attribute_id       = 1
+	short_desc_attribute_id = 9
+	desc_attribute_id       = 10
+)
+
+type (
+
+	QueryOutput struct {
+		Name             string
+		Description      string
+		ShortDescription string
+		Sku              string
+	}
+
+	AttributeTable struct {
+		id		int
+		product_id	int
+		locale		string
+		channel		string
+		attribute_id	int
+	} 
+)
+
+
+func GoogleAuth() {
+	ctx := context.Background()
+	client, err := translate.NewTranslationClient(ctx)
+	if err != nil {
+		log.Fatalf("Failed to create translation client: %v", err)
+	}
+	defer client.Close()
 }
 
 // LoadEnv This function handles loading .env and preparing database connection
@@ -101,9 +128,12 @@ func main() {
 
 	// Translate the products
 	projectID := os.Getenv("GOOGLE_PROJECTID") // Make sure this is set in your .env or environment
-	if err := translateProducts(ctx, client, querySlice, projectID); err != nil {
-		log.Fatalf("Failed to translate products: %v", err)
+
+	// After setting up the client and retrieving querySlice
+	if err := translateProducts(ctx, client, db, querySlice, projectID); err != nil {
+		log.Fatalf("Failed to translate and update products: %v", err)
 	}
+
 }
 
 func SelectQuery(db *sql.DB) ([]QueryOutput, error) {
@@ -132,29 +162,33 @@ func SelectQuery(db *sql.DB) ([]QueryOutput, error) {
 }
 
 // Assuming querySlice is accessible or passed to this function
-func translateProducts(ctx context.Context, client *translate.TranslationClient, querySlice []QueryOutput, projectID string) error {
-	projectID = os.Getenv("GOOGLE_PROJECTID")
+
+func translateProducts(ctx context.Context, client *translate.TranslationClient, db *sql.DB, querySlice []QueryOutput, projectID string) error {
 	sourceLang := "nl"
-	targetLang := "fr"
-
-	for i, product := range querySlice {
-		translatedDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.Description)
-		if err != nil {
-			log.Printf("Failed to translate description for product at index %d: %v", i, err)
-			continue
-		}
-		querySlice[i].Description = translatedDescription
-
-		translatedShortDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.ShortDescription)
-		if err != nil {
-			log.Printf("Failed to translate short description for product at index %d: %v", i, err)
-			continue
-		}
-		querySlice[i].ShortDescription = translatedShortDescription
-	}
+	targetLangs := []string{"en", "fr", "de"}
 
 	for _, product := range querySlice {
-		fmt.Printf("Translated Description: %s, Short Description: %s\n", product.Description, product.ShortDescription)
+		for _, targetLang := range targetLangs {
+
+			productName := product.Name
+
+			translatedDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.Description)
+			if err != nil {
+				log.Printf("Failed to translate description to %s: %v", targetLang, err)
+				continue
+			}
+
+			translatedShortDescription, err := translateText(ctx, client, projectID, sourceLang, targetLang, product.ShortDescription)
+			if err != nil {
+				log.Printf("Failed to translate short description to %s: %v", targetLang, err)
+				continue
+			}
+
+			// Instead of printing, update the database with the translated text
+			if err := updateProductTranslations(db, product.Sku, targetLang, productName, translatedDescription, translatedShortDescription); err != nil {
+				log.Printf("Failed to update translations and name for SKU %s to %s: %v", product.Sku, targetLang, err)
+			}
+		}
 	}
 	return nil
 }
@@ -180,10 +214,22 @@ func translateText(ctx context.Context, client *translate.TranslationClient, pro
 	return "", nil
 }
 
+func updateProductTranslations(db *sql.DB, sku, locale, name, description, shortDescription string) error {
+	query := `UPDATE trrc_product_flat SET name = ?, description = ?, short_description = ? WHERE sku = ? AND locale = ?`
+	_, err := db.Exec(query, name, description, shortDescription, sku, locale)
+	return err
+}
+
+func addAttributeValue(db *sql.DB, name, ) {
+	query := `INSERT INTO trrc_product_attributes_values(`id`, `text_value`, `product_id`, `attribute_id`) VALUES (?, ?, ?, ?)`
+	_, err := db.Exec(id, text_value, product_id, attribute_id)
+}
+
 // Update query function to use later
+
 /*
 func UpdateQuery(db *sql.DB) error {
-	stmt, err := db.Prepare("SELECT `name`, `description`, `short_description` FROM `trrc_product_flat` WHERE `locale` = 'nl';")
+	stmt, err := db.Prepare("UPDATE `trrc_product_flat` SET `name`='product-name', `short_description`='translated-short-description',`description`='translated-description' WHERE `sku` = 'product-sku' AND `locale` = 'product-locale'")
 	if err != nil {
 		return err
 	}
