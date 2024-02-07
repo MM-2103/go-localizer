@@ -25,7 +25,6 @@ var (
 )
 
 type (
-
 	QueryOutput struct {
 		Name             string
 		Description      string
@@ -34,14 +33,13 @@ type (
 	}
 
 	AttributeTable struct {
-		id		int
-		product_id	int
-		locale		string
-		channel		string
-		attribute_id	int
-	} 
+		id           int
+		product_id   int
+		locale       string
+		channel      string
+		attribute_id int
+	}
 )
-
 
 func GoogleAuth() {
 	ctx := context.Background()
@@ -126,10 +124,8 @@ func main() {
 		log.Fatalf("Failed to execute select query: %v", err)
 	}
 
-	// Translate the products
-	projectID := os.Getenv("GOOGLE_PROJECTID") // Make sure this is set in your .env or environment
+	projectID := os.Getenv("GOOGLE_PROJECTID")
 
-	// After setting up the client and retrieving querySlice
 	if err := translateProducts(ctx, client, db, querySlice, projectID); err != nil {
 		log.Fatalf("Failed to translate and update products: %v", err)
 	}
@@ -150,18 +146,16 @@ func SelectQuery(db *sql.DB) ([]QueryOutput, error) {
 		var product QueryOutput
 		err := rows.Scan(&product.Name, &product.Description, &product.ShortDescription, &product.Sku)
 		if err != nil {
-			log.Fatal(err) // Consider returning error instead
+			log.Fatal(err)
 		}
 		querySlice = append(querySlice, product)
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Fatal(err) // Consider returning error instead
+		log.Fatal(err)
 	}
 	return querySlice, nil
 }
-
-// Assuming querySlice is accessible or passed to this function
 
 func translateProducts(ctx context.Context, client *translate.TranslationClient, db *sql.DB, querySlice []QueryOutput, projectID string) error {
 	sourceLang := "nl"
@@ -193,6 +187,8 @@ func translateProducts(ctx context.Context, client *translate.TranslationClient,
 	return nil
 }
 
+// SELECT a.`code`, pav.`id`, pav.`locale`, pav.`text_value`, pav.`product_id`, pro.`sku` FROM `trrc_attributes` a INNER JOIN `trrc_product_attribute_values` pav ON a.`id` = pav.`attribute_id` INNER JOIN `trrc_products` pro ON pav.`product_id` = pro.`id` WHERE pav.`locale` IS NOT NULL AND pav.`locale` = 'nl' AND a.`code` = 'description' OR a.`code` = 'short_description';
+
 // Helper function to abstract the translation API call
 func translateText(ctx context.Context, client *translate.TranslationClient, projectID, sourceLang, targetLang, text string) (string, error) {
 	req := &translatepb.TranslateTextRequest{
@@ -220,9 +216,10 @@ func updateProductTranslations(db *sql.DB, sku, locale, name, description, short
 	return err
 }
 
-func addAttributeValue(db *sql.DB, name, ) {
-	query := `INSERT INTO trrc_product_attributes_values(`id`, `text_value`, `product_id`, `attribute_id`) VALUES (?, ?, ?, ?)`
-	_, err := db.Exec(id, text_value, product_id, attribute_id)
+func addAttributeValue(db *sql.DB) {
+	query := `INSERT INTO trrc_product_attributes_values(id, text_value, product_id, attribute_id) VALUES (?, ?, ?, ?)`
+	_, err := db.Exec(query, id, text_value, product_id, attribute_id)
+	return err
 }
 
 // Update query function to use later
