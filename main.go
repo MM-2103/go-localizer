@@ -20,11 +20,11 @@ import (
 
 type (
 	QueryOutput struct {
-		Name             string
-		Description      string
-		ShortDescription string
+		Name             sql.NullString
+		Description      sql.NullString
+		ShortDescription sql.NullString
+		Channel          sql.NullString
 		Sku              string
-		Channel          string
 		ProductId        int
 	}
 )
@@ -194,13 +194,24 @@ func translateProducts(ctx context.Context, client *translate.TranslationClient,
 // SELECT a.`code`, pav.`id`, pav.`locale`, pav.`text_value`, pav.`product_id`, pro.`sku` FROM `trrc_attributes` a INNER JOIN `trrc_product_attribute_values` pav ON a.`id` = pav.`attribute_id` INNER JOIN `trrc_products` pro ON pav.`product_id` = pro.`id` WHERE pav.`locale` IS NOT NULL AND pav.`locale` = 'nl' AND a.`code` = 'description' OR a.`code` = 'short_description';
 
 // Helper function to abstract the translation API call
-func translateText(ctx context.Context, client *translate.TranslationClient, projectID, sourceLang, targetLang, text string) (string, error) {
+func translateText(ctx context.Context, client *translate.TranslationClient, projectID, sourceLang, targetLang string, text sql.NullString) (string, error) {
+	// Initialize a slice for the contents
+	var contents []string
+
+	// Check if the sql.NullString is valid, then use its String value
+	if text.Valid {
+		contents = append(contents, text.String)
+	} else {
+		// Handle the case where the text is not valid; decide how you want to proceed
+		return "", fmt.Errorf("text is null")
+	}
+
 	req := &translatepb.TranslateTextRequest{
 		Parent:             fmt.Sprintf("projects/%s/locations/global", projectID),
 		SourceLanguageCode: sourceLang,
 		TargetLanguageCode: targetLang,
 		MimeType:           "text/plain",
-		Contents:           []string{text},
+		Contents:           contents, // Use the properly converted slice of strings
 	}
 
 	resp, err := client.TranslateText(ctx, req)
@@ -214,29 +225,19 @@ func translateText(ctx context.Context, client *translate.TranslationClient, pro
 	return "", nil
 }
 
-func updateProductTranslations(db *sql.DB, sku, locale, name, description, shortDescription string) error {
+func updateProductTranslations(db *sql.DB, sku, locale string, name sql.NullString, description, shortDescription string) error {
 	query := `UPDATE trrc_product_flat SET name = ?, description = ?, short_description = ? WHERE sku = ? AND locale = ?`
 	_, err := db.Exec(query, name, description, shortDescription, sku, locale)
 	return err
 }
 
-func insertAttributeTranslation(db *sql.DB, locale, channel, textValue string, productId, attributeId int) error {
-	var exists bool
-	checkQuery := `SELECT EXISTS(SELECT 1 FROM trrc_product_attribute_values WHERE product_id = ? AND attribute_id = ? AND locale = ? LIMIT 1)`
-	err := db.QueryRow(checkQuery, productId, attributeId, locale).Scan(&exists)
+func insertAttributeTranslation(db *sql.DB, locale string, channel sql.NullString, textValue string, productId, attributeId int) error {
+	query := `INSERT INTO trrc_product_attribute_values (locale, channel, text_value, product_id, attribute_id) 
+              VALUES (?, ?, ?, ?, ?)
+              ON DUPLICATE KEY UPDATE text_value=VALUES(text_value), channel=VALUES(channel)`
+	_, err := db.Exec(query, locale, channel, textValue, productId, attributeId)
 	if err != nil {
-		return err
+		return err // Handle the error appropriately
 	}
-
-	if exists {
-		updateQuery := `UPDATE trrc_product_attribute_values SET text_value = ?, channel = ? WHERE product_id = ? AND attribute_id = ? AND locale = ?`
-		_, err := db.Exec(updateQuery, textValue, channel, productId, attributeId, locale)
-		if err != nil {
-			return err
-		}
-	} else {
-		log.Printf("No existing row to update for Product ID: %d, Attribute ID: %d, Locale: %s. Consider inserting or handling this case differently.", productId, attributeId, locale)
-	}
-
 	return nil
 }
